@@ -1,5 +1,8 @@
 #!/usr/bin/env ruby
+# encoding: UTF-8
+
 require 'shellwords'
+require 'csv'
 
 def main
   loop do
@@ -14,75 +17,73 @@ def main
 
     commands = split_on_pipes(line)
 
-    placeholder_in = $stdin
-    placeholder_out = $stdout
-    pipe = []
+    p_in  = $stdin
+    p_out = $stdout
+    pipe  = []
 
     commands.each_with_index do |command, index|
-      program, *arguments = Shellwords.shellsplit(command)
+      prog, *args = Shellwords.shellsplit(command)
 
-      if builtin?(program)
-        call_builtin(program, *arguments)
-
+      if builtin? prog
+        call_builtin prog, *args
       else
-        if index+1 < commands.size
-          pipe = IO.pipe
-          placeholder_out = pipe.last
+        unless command == commands.last
+          pipe  = IO.pipe
+          p_out = pipe.last
         else
-          placeholder_out = $stdout
+          p_out = $stdout
         end
 
-        spawn_program(program, *arguments, placeholder_out, placeholder_in)
+        spawn_program prog, *args, p_out, p_in
 
-        placeholder_out.close unless placeholder_out == $stdout
-        placeholder_in.close unless placeholder_in == $stdin
-        placeholder_in = pipe.first
+        p_out.close unless p_out == $stdout
+        p_in.close  unless p_in  == $stdin
+        p_in = pipe.first
       end
     end
 
     Process.waitall
+
   end
 end
 
-def split_on_pipes(line)
-  line.scan( /([^"'|]+)|["']([^"']*)["']/ ).flatten.compact
+def split_on_pipes line
+  CSV.parse(line, :col_sep => '|').flatten
 end
 
-def spawn_program(program, *arguments, placeholder_out, placeholder_in)
-  fork {
-    unless placeholder_out == $stdout
-      $stdout.reopen(placeholder_out)
-      placeholder_out.close
+def builtin? command
+  BUILTINS.has_key? command
+end
+
+def call_builtin command, *args
+  BUILTINS[command].call(*args)
+end
+
+def spawn_program prog, *args, io_out, io_in
+  fork { 
+    unless io_out == $stdout
+      $stdout.reopen(io_out)
+      io_out.close
     end
 
-    unless placeholder_in == $stdin
-      $stdin.reopen(placeholder_in)
-      placeholder_in.close
+    unless io_in == $stdin
+      $stdin.reopen(io_in)
+      io_in.close
     end
 
-    exec program, *arguments
+    exec prog, *args
   }
-end
-
-def builtin?(program)
-  BUILTINS.has_key?(program)
-end
-
-def call_builtin(program, *arguments)
-  BUILTINS[program].call(*arguments)
 end
 
 BUILTINS = {
-  'cd' => lambda { |dir = ENV["HOME"]| Dir.chdir(dir) },
-  'exit' => lambda { |code = 0| exit(code.to_i) },
-  'exec' => lambda { |*command| exec *command },
-  'set' => lambda { |args|
-    key, value = args.split('=')
-    ENV[key] = value
-  }
+  'cd'   => lambda {|dir = ENV["HOME"]| Dir.chdir(File.expand_path dir) },
+  'exit' => lambda {|code = 0| exit(code.to_i) },
+  'exec' => lambda {|*command| exec *command },
+  'set'  => lambda {|args| key, value = args.split('='); ENV[key] = value}
 }
 
-ENV['PROMPT'] = '-> '
+ENV['PROMPT'] = '~> '
 
-main
-
+if $0 == __FILE__
+  main
+end
